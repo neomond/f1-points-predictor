@@ -5,7 +5,7 @@ Pulls real Formula 1 race + qualifying data from the Jolpica API
 (the free successor to the deprecated Ergast API) and saves a flat CSV.
 
 Run this on YOUR machine (not in a restricted sandbox):
-    python src/fetch_data.py --start 2018 --end 2024 --out data/f1_raw.csv
+    python src/fetch_data.py --start 2018 --end 2026 --out data/f1_raw.csv
 
 Jolpica is rate-limited (~4 req/sec, 500/hr for anon). We sleep between
 calls to stay polite. Pulling ~7 seasons takes a few minutes.

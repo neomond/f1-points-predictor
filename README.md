@@ -7,7 +7,7 @@ in a given race — a binary classification project built with a focus on
 > Trained on 2018–2025, evaluated on the 2026 season to study how a major
 > **regulation reset** affects model performance (concept drift).
 
-[**▶ Live demo**](https://f1-points-predictor-iq5km2fmjbqvkjbkxrn3pe.streamlit.app) · [**Writeup**](#results)
+[**▶ Live demo**](https://f1-points-predictor-iq5km2fmjbqvkjbkxrn3pe.streamlit.app) · [**Results**](#results)
 
 ---
 
@@ -73,29 +73,39 @@ re-fit on each CV fold's training data only — structurally preventing leakage.
 
 ## Results
 
+![Distribution shift and what drives a points finish](assets/linkedin_results.png)
+
 **Model comparison** (TimeSeriesSplit CV, ROC-AUC on 2018–2025):
 
 | Model | CV ROC-AUC |
 |---|---|
-| **Logistic Regression** | **0.854** |
-| Gradient Boosting | 0.849 |
-| Random Forest | 0.848 |
+| **Logistic Regression** | **0.853** |
+| Random Forest | 0.852 |
+| Gradient Boosting | 0.847 |
 
-Logistic regression matched the tree ensembles — the signal is largely
-linear, so the **simplest, most interpretable model was chosen**.
+Logistic regression edged out the tree ensembles by a hair — the signal is
+largely linear, so the **simplest, most interpretable model was chosen**.
+(The near-tie with Random Forest is itself a useful finding: added model
+complexity bought essentially nothing here.)
 
 **Distribution shift (2026 regulation reset):**
 
 | Metric | 2018–2025 (CV) | 2026 (held-out) |
 |---|---|---|
-| ROC-AUC | 0.854 | 0.834 |
+| ROC-AUC | 0.850 | 0.771 |
 
-The drop quantifies how the regulation change altered the
-feature→outcome relationship the model had learned.
+An 8-point ROC-AUC drop. The 2026 technical regulation reset reshuffled the
+competitive order, breaking the feature→outcome relationships the model had
+learned on the stable era — a concrete, quantified case of **concept drift**.
 
 **What drives a points finish?** (standardized coefficients)
-Starting `grid` position dominates by a wide margin — track position is king,
-exactly as F1 intuition predicts.
+
+![Feature coefficients](assets/feature_importance.png)
+
+Qualifying position dominates by a wide margin — track position is king,
+exactly as F1 intuition predicts. (Because `quali_pos` and `grid` are highly
+correlated, the model leans on qualifying and the standalone `grid`
+contribution shrinks — a textbook multicollinearity effect.)
 
 ---
 
@@ -107,7 +117,7 @@ pip install -r requirements.txt
 
 # 2. Generate data (synthetic, for offline dev)
 python src/make_synthetic.py
-#    OR fetch real data (run on your machine, not a sandbox):
+#    OR fetch real data from the Jolpica API:
 #    python src/fetch_data.py --start 2018 --end 2026
 
 # 3. Cross-validate the pipeline (TimeSeriesSplit)
@@ -129,6 +139,7 @@ streamlit run app.py
 
 ```
 f1-points-predictor/
+├── assets/            # result charts
 ├── data/              # f1_raw.csv
 ├── models/            # saved model.joblib
 ├── src/
@@ -139,6 +150,7 @@ f1-points-predictor/
 │   ├── tune.py            # GridSearchCV model comparison
 │   └── evaluate.py        # held-out 2026 eval + distribution shift
 ├── app.py             # Streamlit demo
+├── make_post_image.py # generates the result charts
 └── requirements.txt
 ```
 

@@ -7,7 +7,7 @@ in a given race — a binary classification project built with a focus on
 > Trained on 2018–2025, evaluated on the 2026 season to study how a major
 > **regulation reset** affects model performance (concept drift).
 
-[**▶ Live demo**](#) · [**Writeup**](#results)
+[[**▶ Live demo**](https://f1-points-predictor-iq5km2fmjbqvkjbkxrn3pe.streamlit.app) · [**Writeup**](#results)
 
 ---
 

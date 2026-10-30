@@ -1,137 +1,201 @@
 # 🏎️ F1 Points-Finish Predictor
 
 Predicting whether a Formula 1 driver will **finish in the points (top 10)**
-in a given race — a binary classification project built with a focus on
-**leakage-safe, time-aware machine learning**.
+in a given race. It's a binary classification project focused on
+**leakage-safe, time-aware machine learning, judged against an honest
+baseline and with real uncertainty estimates**.
 
-> Trained on 2018–2025, evaluated on the 2026 season to study how a major
-> **regulation reset** affects model performance (concept drift).
+> Trained on 2018–2025, tested walk-forward season by season, and on the
+> 2026 season (regulation reset).
 
-[**▶ Live demo**](https://f1-points-predictor-iq5km2fmjbqvkjbkxrn3pe.streamlit.app) · [**Results**](#results)
+[**▶ Live demo**](https://f1-points-predictor-iq5km2fmjbqvkjbkxrn3pe.streamlit.app) · [**Results**](#results) · [**Audit log**](#audit-what-i-found-when-i-tried-to-break-my-own-pipeline)
 
 ---
 
 ## Why this project
 
-Most ML tutorials shuffle their data randomly. Real-world sequential data —
-like F1 race results — **cannot** be shuffled: you predict the *next* race
-using only *past* races. This project is built around that constraint:
+F1 results are sequential: you predict the *next* race using only *past*
+races. This project is built around that constraint, and **every claim is
+backed by a test or a confidence interval**:
 
-- **No data leakage** — every form feature uses only races that happened
-  *before* the race being predicted (`.shift(1)` + expanding/rolling windows).
-- **Time-aware validation** — `TimeSeriesSplit` instead of random `KFold`,
-  so the model is always validated on races that come *after* its training
-  races.
-- **Distribution-shift analysis** — 2026's new engine/chassis regulations
-  reshuffle the competitive order, letting us measure how a model degrades
-  when the world changes underneath it.
+- **No data leakage, proven by tests.** `pytest` scrambles a race's
+  results, or deletes all later races, and checks that no feature of
+  that race changes.
+- **Walk-forward validation by season.** Train on all earlier seasons and
+  predict the next one. Races are never split across folds.
+- **A baseline to beat.** Every score is compared with the simplest
+  possible model: *rank drivers by starting grid position*.
+- **Honest uncertainty.** 95% confidence intervals come from a **race-level
+  block bootstrap**, because drivers in the same race are not independent.
+- **Data validation.** Duplicate rows, gaps in finishing positions,
+  impossible field sizes and odd encodings are caught before any feature
+  is built.
 
 ---
 
 ## The data
 
 Real data comes from the [Jolpica API](https://github.com/jolpica/jolpica-f1)
-(the free successor to the deprecated Ergast API), covering 2018–2026.
-Each row is **one driver in one race**.
+(the free successor to the deprecated Ergast API), covering 2018 to round 6
+of 2026: **179 races, 3,590 driver-race rows**. Each row is **one driver in
+one race**.
 
-A synthetic generator (`src/make_synthetic.py`) mirrors the exact schema —
-including a simulated 2026 regulation reset — so the full pipeline can be
-developed and tested offline.
+`src/validate.py` checks it before use:
+- one row per driver per race
+- finishing positions exactly 1..N in every race
+- field size between 15 and 24
+- at most 2 cars per team
+- no negative grid or points values
+
+Known quirks (45 pit-lane starts, 7 missing qualifying positions) are
+reported and handled explicitly.
+
+A synthetic generator (`src/make_synthetic.py`) mirrors the schema for offline
+development.
 
 ---
 
-## Features (all leakage-safe)
+## Features (all leakage-safe, all tested)
 
 | Feature | Description | Why it's safe |
 |---|---|---|
-| `grid` | Starting grid position | Set on Saturday, before the race |
+| `grid` | Starting grid position; **pit-lane starts (`grid = 0`) mapped to the back** | Set before the race |
 | `quali_pos` | Qualifying position | Known before the race |
-| `driver_avg_finish` | Career-to-date average finish | Expanding mean, shifted |
-| `driver_recent_finish` | Avg finish, last 3 races | Rolling mean, shifted |
-| `driver_points_rate` | % of past races in the points | Expanding mean, shifted |
-| `constructor_recent_finish` | Team's recent form | Rolling mean, shifted |
-| `season_points_so_far` | Championship points before this race | Cumulative, shifted |
-| `constructorId`, `circuitId` | Team & circuit | Categorical, known in advance |
+| `driver_avg_finish` | Career-to-date average finish | Cumulative sum minus the current race |
+| `driver_recent_finish` | Average finish, last 3 races | Shifted one race, then rolled |
+| `driver_points_rate` | Share of past races in the points | Cumulative, current race excluded |
+| `constructor_recent_finish` | Team's average finish over its last 3 races | **Aggregated per race first, then shifted by one *race*** |
+| `season_points_so_far` | Championship points before this race | Cumulative within season, current race excluded |
+| `constructorId`, `circuitId` | Team and circuit | Categorical, known in advance |
 
 ---
 
 ## Pipeline
 
 ```
-ColumnTransformer
-├── numeric:    SimpleImputer(median) → StandardScaler
-└── categorical: SimpleImputer(mode)  → OneHotEncoder
-                          │
-                          ▼
-              LogisticRegression (class_weight="balanced")
+validate_raw()  →  build_features()  →  Pipeline
+                                          ├── numeric:     SimpleImputer → StandardScaler
+                                          ├── categorical: SimpleImputer → OneHotEncoder
+                                          └── LogisticRegression (C=0.01, class_weight="balanced")
 ```
 
-Everything lives inside one scikit-learn `Pipeline`, so preprocessing is
-re-fit on each CV fold's training data only — structurally preventing leakage.
+All preprocessing lives inside one scikit-learn `Pipeline`, so it is re-fit
+on each fold's training data only.
 
 ---
 
 ## Results
 
-![Distribution shift and what drives a points finish](assets/linkedin_results.png)
+![Walk-forward results and what drives a points finish](assets/linkedin_results.png)
 
-**Model comparison** (TimeSeriesSplit CV, ROC-AUC on 2018–2025):
+### 1. Walk-forward by season, against a one-feature baseline
 
-| Model | CV ROC-AUC |
+Each season is predicted by a model trained on **all earlier seasons only**.
+*Lift* = model AUC − grid-only AUC. The 95% CIs come from resampling whole
+races (2,000 draws), and the lift CI is paired (same races for both).
+
+| Season | Races | Model AUC [95% CI] | Grid-only AUC | Lift [95% CI] | Precision@10 model / grid |
+|---|---|---|---|---|---|
+| 2020 | 17 | 0.834 [0.788, 0.877] | 0.823 | +0.011 [−0.002, +0.022] | 0.759 / 0.747 |
+| 2021 | 22 | 0.858 [0.811, 0.898] | 0.833 | +0.025 [+0.003, +0.045] | 0.786 / 0.782 |
+| **2022** *(reg reset)* | 22 | 0.841 [0.808, 0.876] | 0.790 | **+0.051 [+0.030, +0.074]** | 0.786 / 0.727 |
+| 2023 | 22 | 0.857 [0.804, 0.905] | 0.807 | +0.050 [+0.028, +0.074] | 0.795 / 0.736 |
+| 2024 | 24 | 0.912 [0.880, 0.942] | 0.889 | +0.023 [+0.001, +0.046] | 0.846 / 0.838 |
+| 2025 | 24 | 0.841 [0.792, 0.884] | 0.835 | +0.006 [−0.008, +0.020] | 0.767 / 0.779 |
+| **2026** *(reg reset)* | 6 | 0.782 [0.689, 0.880] | 0.782 | +0.000 [−0.027, +0.034] | 0.700 / 0.683 |
+
+**Reading it honestly:**
+- **Grid position does most of the work.** It alone reaches AUC 0.78–0.89.
+- **The extra form features add a real but small edge:** about +0.02 to
+  +0.05 AUC, significant in 4 of 6 full seasons.
+- **The edge is largest when the grid is least informative** (2022–2023),
+  when recent team and driver form tells you something qualifying doesn't.
+- **Precision@10** asks: *of the model's top 10 picks per race, how many
+  scored?* Exactly 10 drivers score each race, so this is the natural
+  question.
+
+### 2. Did the 2026 regulation reset break the model?
+
+The first version of this project claimed an 8-point AUC drop in 2026 as
+evidence of concept drift. **With proper checks, that claim doesn't hold:**
+
+- **2026 is only 6 races in.** Its 95% CI [0.689, 0.880] contains the
+  2020–2025 average (0.857), so there is no statistically clear degradation
+  yet.
+- **The baseline fell by the same amount** (0.830 → 0.782). Early-2026 races
+  were harder to predict *for everyone*, not specifically for this model.
+- **2022 is a natural control.** It was also a major regulation reset, and
+  the model didn't degrade. It had its *largest* lift that season.
+
+The right conclusion is *"not enough evidence yet"*. The pipeline re-runs
+the check as more 2026 races are added.
+
+### 3. Model comparison
+
+All three model families were tuned with the same season folds (28
+configurations × 6 folds):
+
+| Model | Walk-forward CV ROC-AUC (± std across seasons) |
 |---|---|
-| **Logistic Regression** | **0.853** |
-| Random Forest | 0.852 |
-| Gradient Boosting | 0.847 |
+| **Logistic Regression** | **0.857 ± 0.026** |
+| Random Forest | 0.854 ± 0.025 |
+| Gradient Boosting | 0.851 ± 0.025 |
 
-Logistic regression edged out the tree ensembles by a hair — the signal is
-largely linear, so the **simplest, most interpretable model was chosen**.
-(The near-tie with Random Forest is itself a useful finding: added model
-complexity bought essentially nothing here.)
+The differences (≤ 0.006) are about 4× smaller than the season-to-season variation (± 0.025),
+so they're **not meaningful**. The simplest, most interpretable model was
+chosen.
 
-**Distribution shift (2026 regulation reset):**
+### 4. Calibration and what drives a points finish
 
-| Metric | 2018–2025 (CV) | 2026 (held-out) |
-|---|---|---|
-| ROC-AUC | 0.850 | 0.771 |
+On 2026, the model predicts a 45.2% average points probability against an
+actual rate of 45.5% (Brier score 0.198), so its **probabilities are well
+calibrated**.
 
-An 8-point ROC-AUC drop. The 2026 technical regulation reset reshuffled the
-competitive order, breaking the feature→outcome relationships the model had
-learned on the stable era — a concrete, quantified case of **concept drift**.
-
-**What drives a points finish?** (standardized coefficients)
+Qualifying and grid position dominate the coefficients, followed by
+recent team form. Because `quali_pos` and `grid` are highly correlated,
+their coefficients share the effect (multicollinearity).
 
 ![Feature coefficients](assets/feature_importance.png)
 
-Qualifying position dominates by a wide margin — track position is king,
-exactly as F1 intuition predicts. (Because `quali_pos` and `grid` are highly
-correlated, the model leans on qualifying and the standalone `grid`
-contribution shrinks — a textbook multicollinearity effect.)
+---
+
+## Audit: what I found when I tried to break my own pipeline
+
+| # | Problem | How it was found | Fix | Effect |
+|---|---|---|---|---|
+| 1 | **Teammate leak.** Team form was shifted by *row*, but each team has 2 rows per race, so driver #2's feature contained driver #1's result from the **same race**. | Perturbation test: scrambling one race changed 10 of that race's own feature values. | Aggregate to one row per (team, race), shift by one *race*, merge back. | Small (2026 AUC +0.005), but the "leak-free" claim is now true and tested. |
+| 2 | **Pit-lane starts read as pole.** `grid = 0` (45 rows) looked *better* than P1. | Data validation report. | Map to the back of the grid (field size + 1). | Correct semantics. |
+| 3 | **Folds split races in half.** `TimeSeriesSplit` cuts by row count, and all 5 fold boundaries fell mid-race. | Checked each fold boundary. | Walk-forward folds by whole season. | Clean, realistic validation. |
+| 4 | **No baseline.** A model at AUC 0.85 sounds strong until grid position alone scores 0.83. | Added a grid-only baseline. | Every result reported as lift with a CI. | Honest headline. |
+| 5 | **Drift claim without uncertainty.** An 8-point drop on 6 races was presented as a finding. | Race bootstrap CI, and 2022 as a control. | Claim withdrawn, check automated. | See Results §2. |
+
+Also changed:
+- **Feature engineering:** vectorised (`cumsum`/`cumcount` instead of
+  `groupby().apply(lambda)`); outputs verified identical, **141 ms → 37 ms**.
+- **Bootstrap:** uses a rank-based AUC (verified equal to sklearn's); the
+  full evaluation runs in **~2 min → ~24 s**.
 
 ---
 
 ## Run it yourself
 
 ```bash
-# 1. Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
-# 2. Generate data (synthetic, for offline dev)
-python src/make_synthetic.py
-#    OR fetch real data from the Jolpica API:
-#    python src/fetch_data.py --start 2018 --end 2026
+make validate   # data-quality checks on data/f1_raw.csv
+make test       # leakage + data tests (pytest)
+make train      # walk-forward CV
+make tune       # model comparison (GridSearchCV, season folds)
+make evaluate   # walk-forward table, drift check, 2026 details, saves model
+make charts     # regenerate the README figures
 
-# 3. Cross-validate the pipeline (TimeSeriesSplit)
-python src/train.py
+# fetch fresh data from the Jolpica API
+python src/fetch_data.py --start 2018 --end 2026
 
-# 4. Tune & compare models (GridSearchCV)
-python src/tune.py
-
-# 5. Final evaluation on 2026 + save model
-python src/evaluate.py
-
-# 6. Launch the interactive app
 streamlit run app.py
 ```
+
+Tests run automatically on every push (GitHub Actions).
 
 ---
 
@@ -139,32 +203,39 @@ streamlit run app.py
 
 ```
 f1-points-predictor/
-├── assets/            # result charts
-├── data/              # f1_raw.csv
-├── models/            # saved model.joblib
+├── .github/workflows/tests.yml   # CI: validate data + run tests
+├── assets/                       # result charts
+├── data/f1_raw.csv
 ├── src/
-│   ├── fetch_data.py      # real Jolpica API fetcher
-│   ├── make_synthetic.py  # synthetic data (matches real schema)
+│   ├── fetch_data.py      # Jolpica API fetcher
+│   ├── make_synthetic.py  # synthetic data (same schema)
+│   ├── validate.py        # data-quality checks
 │   ├── features.py        # leakage-safe feature engineering
-│   ├── train.py           # Pipeline + TimeSeriesSplit CV
+│   ├── metrics.py         # grid baseline, precision@10, race bootstrap
+│   ├── train.py           # Pipeline + season walk-forward CV
 │   ├── tune.py            # GridSearchCV model comparison
-│   └── evaluate.py        # held-out 2026 eval + distribution shift
-├── app.py             # Streamlit demo
-├── make_post_image.py # generates the result charts
-└── requirements.txt
+│   └── evaluate.py        # walk-forward table, drift check, final model
+├── tests/test_features.py # leakage, validation and split tests
+├── app.py                 # Streamlit demo
+├── make_post_image.py     # generates the charts
+├── Makefile
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
-## Key ML concepts demonstrated
+## Key concepts demonstrated
 
-- scikit-learn **Pipelines** & **ColumnTransformer**
-- **TimeSeriesSplit** cross-validation (vs. naive KFold)
-- **GridSearchCV** hyperparameter tuning & model selection
-- Imbalanced-classification **metrics**: precision, recall, F1, ROC-AUC
-- **Threshold analysis** (precision/recall trade-off)
-- **Data-leakage prevention** in temporal data
-- **Concept drift** / distribution-shift analysis
+- **Leakage prevention**, verified by perturbation and truncation tests
+- **Walk-forward validation** with group integrity (no race split across folds)
+- **Baselines and lift** instead of raw scores
+- **Block bootstrap** confidence intervals (resampling races, paired comparisons)
+- **Distribution-shift analysis** with a control case
+- **Data validation** before modelling
+- **Calibration** (Brier score) and threshold trade-offs
+- **Model selection** that accounts for noise between folds
+- Vectorised pandas and benchmarked performance improvements
+- scikit-learn **Pipelines** and **ColumnTransformer**, plus **CI** with GitHub Actions
 
 ---
 
-*Built as a portfolio project exploring ML engineering practices in a
-motorsport context.*
+*A portfolio project on rigorous, honest ML evaluation for sequential data.*

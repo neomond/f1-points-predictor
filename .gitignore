@@ -5,3 +5,11 @@ venv/
 .DS_Store
 .ipynb_checkpoints/
 *.joblib
+
+# model artefacts and delivery files
+*.pt
+*.pth
+*.ckpt
+*.patch
+models/
+.pytest_cache/

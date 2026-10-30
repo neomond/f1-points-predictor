@@ -128,6 +128,6 @@ if st.button("Predict"):
     else:
         st.warning(f"Unlikely to score points ({1 - proba:.0%} confidence)")
 
-    st.caption("Note: the model adds only a small edge over simply "
-               "ranking drivers by grid position, and 2026 has too few "
-               "races to judge it yet (see README).")
+    st.caption("Note: grid position does most of the work; the model "
+               "adds a small but statistically significant edge on top of "
+               "it, including in the 2026 season (see README).")

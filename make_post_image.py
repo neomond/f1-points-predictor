@@ -17,10 +17,8 @@ from matplotlib import font_manager
 
 sys.path.insert(0, "src")
 from features import build_features
-from train import make_pipeline, load_train_test, NUM_FEATURES, CAT_FEATURES
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import TimeSeriesSplit, cross_val_score
-from sklearn.metrics import roc_auc_score
+from train import NUM_FEATURES, CAT_FEATURES, DEFAULT_DATA
+from evaluate import walk_forward, fit_final_model
 
 # ---- Theme ----
 BG = "#15151e"
@@ -38,13 +36,9 @@ plt.rcParams.update({
 })
 
 # ---- Recompute the numbers fresh ----
-X_train, y_train, X_test, y_test, _, _ = load_train_test()
-model = LogisticRegression(C=0.1, max_iter=1000, class_weight="balanced")
-pipe = make_pipeline(model)
-tscv = TimeSeriesSplit(n_splits=5)
-cv_auc = cross_val_score(pipe, X_train, y_train, cv=tscv, scoring="roc_auc").mean()
-pipe.fit(X_train, y_train)
-test_auc = roc_auc_score(y_test, pipe.predict_proba(X_test)[:, 1])
+df, _ = build_features(DEFAULT_DATA)
+wf, _ = walk_forward(df)
+pipe = fit_final_model()
 
 # coefficients
 ohe = pipe.named_steps["prep"].named_transformers_["cat"].named_steps["onehot"]
@@ -58,20 +52,23 @@ imp = pd.Series(coefs, index=feat_names).sort_values()
 # ============================================================
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6.27), dpi=100)
 
-# Panel 1: distribution shift
-bars = ax1.bar(["2018-2025\n(cross-val)", "2026\n(held-out)"],
-               [cv_auc, test_auc],
-               color=[ORANGE, BLUE], width=0.55, edgecolor="none")
-ax1.set_ylim(0.7, 0.9)
-ax1.set_ylabel("ROC-AUC", fontsize=13, fontweight="bold")
-ax1.set_title("Distribution shift after the\n2026 regulation reset",
+# Panel 1: walk-forward, model vs grid baseline, with 95% race-bootstrap CI
+x = wf["season"].to_numpy()
+yerr = [wf["model_auc"] - wf["auc_lo"], wf["auc_hi"] - wf["model_auc"]]
+ax1.errorbar(x, wf["model_auc"], yerr=yerr, color=ORANGE, marker="o", lw=2.5,
+             capsize=4, label="model (95% CI)")
+ax1.plot(x, wf["grid_auc"], color=BLUE, marker="s", lw=2, ls="--",
+         label="baseline: grid position only")
+for s, name in [(2022, "2022 regs"), (2026, "2026 regs")]:
+    ax1.axvline(s, color=MUTED, lw=0.8, ls=":")
+    ax1.text(s, 0.955, name, color=MUTED, fontsize=10, ha="center")
+ax1.set_ylim(0.65, 0.97)
+ax1.set_xticks(x)
+ax1.set_ylabel("ROC-AUC (season predicted from all earlier seasons)",
+               fontsize=11, fontweight="bold")
+ax1.set_title("Walk-forward by season:\nmodel vs a one-feature baseline",
               fontsize=15, fontweight="bold", color=ORANGE, pad=15)
-for b, v in zip(bars, [cv_auc, test_auc]):
-    ax1.text(b.get_x() + b.get_width() / 2, v + 0.005, f"{v:.3f}",
-             ha="center", fontsize=14, fontweight="bold")
-ax1.annotate(f"-{(cv_auc - test_auc):.3f}",
-             xy=(1, test_auc), xytext=(0.5, 0.86),
-             color=MUTED, fontsize=12, ha="center")
+ax1.legend(loc="lower left", frameon=False, fontsize=10)
 ax1.spines[["top", "right"]].set_visible(False)
 
 # Panel 2: top feature influences
@@ -89,7 +86,7 @@ ax2.set_title("What drives a points finish?\n(model coefficients)",
               fontsize=15, fontweight="bold", color=ORANGE, pad=15)
 ax2.spines[["top", "right", "left"]].set_visible(False)
 
-fig.suptitle("F1 Points-Finish Predictor  ·  scikit-learn + TimeSeriesSplit",
+fig.suptitle("F1 Points-Finish Predictor  ·  walk-forward validation + race bootstrap",
              fontsize=16, fontweight="bold", y=1.02)
 fig.tight_layout()
 fig.savefig("linkedin_results.png", bbox_inches="tight", dpi=100)

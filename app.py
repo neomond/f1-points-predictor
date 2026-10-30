@@ -49,8 +49,8 @@ def load_model():
         if not os.path.exists(DATA_PATH):
             from make_synthetic import main as make_data
             make_data(out=DATA_PATH)
-        from evaluate import final_evaluate
-        return final_evaluate()
+        from evaluate import fit_final_model   # fast: no bootstrap report
+        return fit_final_model()
     return joblib.load(MODEL_PATH)
 
 
@@ -69,8 +69,8 @@ def load_reference():
 
 st.title("🏎️ F1 Points-Finish Predictor")
 st.caption("Will this driver finish in the points (top 10)? "
-           "Logistic regression trained on 2018–2025, validated with "
-           "TimeSeriesSplit.")
+           "Logistic regression trained on 2018–2025, validated "
+           "season-by-season (walk-forward).")
 
 with st.spinner("Loading model…"):
     model = load_model()
@@ -128,6 +128,6 @@ if st.button("Predict"):
     else:
         st.warning(f"Unlikely to score points ({1 - proba:.0%} confidence)")
 
-    st.caption("Note: model trained on 2018–2025. The 2026 regulation "
-               "reset shifts the competitive order, so treat 2026 "
-               "predictions with extra caution (see README).")
+    st.caption("Note: the model adds only a small edge over simply "
+               "ranking drivers by grid position, and 2026 has too few "
+               "races to judge it yet (see README).")

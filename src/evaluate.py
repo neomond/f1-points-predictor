@@ -99,11 +99,18 @@ def print_shift_check(wf):
           f"range {hist.model_auc.min():.3f}-{hist.model_auc.max():.3f}")
     print(f"Model AUC, 2026:      {cur.model_auc:.3f}  95% CI [{cur.auc_lo:.3f}, {cur.auc_hi:.3f}]  "
           f"({int(cur.races)} races)")
-    inside = cur.auc_lo <= hist.model_auc.mean() <= cur.auc_hi
-    print(f"-> the historical mean {'IS' if inside else 'is NOT'} inside the 2026 interval: "
-          f"{'no statistically clear degradation yet' if inside else 'a real drop'}.")
-    print(f"Grid baseline AUC moved too: {hist.grid_auc.mean():.3f} -> {cur.grid_auc:.3f}, "
-          "so part of any drop is races being harder to predict for everyone.")
+    hist_mean = hist.model_auc.mean()
+    if cur.auc_lo <= hist_mean <= cur.auc_hi:
+        verdict = "no statistically clear change vs earlier seasons"
+    elif cur.model_auc < hist_mean:
+        verdict = "a statistically clear DROP vs earlier seasons"
+    else:
+        verdict = "statistically clearly BETTER than earlier seasons"
+    print(f"-> 2020-2025 mean {'IS' if 'no ' in verdict else 'is NOT'} inside the "
+          f"{TEST_SEASON} interval: {verdict}.")
+    print(f"Grid baseline AUC: {hist.grid_auc.mean():.3f} (2020-2025 mean) -> {cur.grid_auc:.3f}; "
+          f"lift over grid: {hist.lift.mean():+.3f} -> {cur.lift:+.3f} "
+          f"[{cur.lift_lo:+.3f}, {cur.lift_hi:+.3f}]")
     if 2022 in set(wf.season):
         r22 = wf[wf.season == 2022].iloc[0]
         print(f"Control: 2022 (also a regulation reset) model AUC {r22.model_auc:.3f}, "
